@@ -1,0 +1,181 @@
+#!/usr/bin/python
+import os
+import sys
+import shutil
+import argparse
+import ConfigParser
+import pandas as pd
+from glob import glob
+
+parser = argparse.ArgumentParser(description="Prepare files for Docking or Virtual Screening")
+
+parser.add_argument('-f',
+    type=str,
+    dest='config_file',
+    help='config file: .ini')
+
+parser.add_argument('-r',
+    type=str,
+    dest='input_files_r',
+    nargs='+',
+    required=True,
+    help = 'Target files: .pdb')
+
+parser.add_argument('-l',
+    type=str,
+    dest='input_files_l',
+    nargs='+',
+    help='PDB files containing the ligand!')
+
+parser.add_argument('-o', '-overwrite',
+    action='store_true',
+    dest='overwrite',
+    default=False,
+    help='Overwrite previous folders')
+
+parser.add_argument('-s',
+    dest='sitecsv',
+    type=str,
+    default=None,
+    help='Update binding sites info in config file from file')
+
+parser.add_argument('-w',
+    dest='rundir',
+    type=str,
+    default='run',
+    help='Run directory for virtual screening')
+
+args = parser.parse_args()
+
+for file_r in args.input_files_r:
+    if not os.path.exists(file_r):
+        raise ValueError("File %s not found!"%(file_r))
+
+for file_l in args.input_files_l:
+    if not os.path.exists(file_l):
+        raise ValueError("File %s not found!"%(file_l))
+
+
+def update_config_file(new_config_file, config_file, label_r, csvfile):
+    """Update binding site parameters in config file"""
+
+    # create tmp config file name from original config file
+    tmp_config_file = list(os.path.splitext(new_config_file))
+    tmp_config_file.insert(1,'_tmp')
+    tmp_config_file = ''.join(tmp_config_file)
+
+    # remove section 'SITE' and option site in DOCKING section of config file if exists
+    with open(tmp_config_file, 'w') as tmpf:
+        with open(config_file, 'r') as newf:
+            isdock = False
+            sitesection = False
+            docksection = False
+            for line in newf:
+                # check if still in section SITE*
+                if line.startswith('[SITE'):
+                    sitesection = True
+                if sitesection and line.startswith('[') and not line.startswith('[SITE'): # new section has been reached
+                    sitesection = False
+                # check if still in section DOCKING
+                if line.startswith('[DOCKING]'):
+                    docksection = True
+                    isdock = True
+                if docksection and line.startswith('[') and not line.startswith('[DOCKING]'): # new section has been reached
+                    docksection = False
+                # check if option line in section DOCKING
+                if line.strip().startswith('site') and docksection:
+                    siteline = True
+                else:
+                    siteline = False
+                if not sitesection and not siteline:
+                    tmpf.write(line)
+    shutil.move(tmp_config_file, new_config_file)
+
+    df = pd.read_csv(csvfile)
+    rows = df[df['target'] == label_r]
+
+    nsites = len(rows)
+    if nsites == 1:
+         # add new sections 'SITE' and option site
+        with open(tmp_config_file, 'w') as tmpf:
+            with open(new_config_file, 'r') as newf:
+                for line in newf:
+                    tmpf.write(line)
+                for row in rows.iterrows():
+                    section = 'SITE'
+                    center_conf = row[1]['center']
+                    boxsize_conf = row[1]['size']
+
+                    newsite_section = """
+[%(section)s]
+center = %(center_conf)s
+boxsize = %(boxsize_conf)s"""% locals()
+                    tmpf.write(newsite_section+'\n')
+    elif nsites > 1:
+        # add new sections 'SITE' and option site
+        with open(tmp_config_file, 'w') as tmpf:
+            with open(new_config_file, 'r') as newf:
+                for line in newf:
+                    tmpf.write(line)
+                    if line.startswith('[DOCKING]'):
+                        tmpf.write('site = ' + ', '.join(['site%s'%int(row[1]['site']) for row in rows.iterrows()])+'\n')
+                for row in rows.iterrows():
+                    section = 'SITE' + str(int(row[1]['site']))
+                    center_conf = row[1]['center']
+                    boxsize_conf = row[1]['size']
+
+                    newsite_section = """
+[%(section)s]
+center = %(center_conf)s
+boxsize = %(boxsize_conf)s"""% locals()
+                    tmpf.write(newsite_section+'\n')
+    shutil.move(tmp_config_file, new_config_file)
+
+files_l = {}
+info = {}
+features = ['label', 'filename']
+for ft in features:
+    info[ft] = []
+
+for idx, file_l in enumerate(args.input_files_l):
+    if os.path.isfile(file_l):
+        label = 'lig' + (3-len(str(idx+1)))*'0' + str(idx+1)
+        files_l[label] = [file_l]
+        info['label'].append(label)
+        info['filename'].append(os.path.relpath(file_l))
+
+info = pd.DataFrame(info)
+info = info[features].to_csv('compounds.csv', index=False)
+
+files_r = {}
+for idx, file_r in enumerate(args.input_files_r):
+    label = 'target' + (3-len(str(idx+1)))*'0' + str(idx+1)
+    files_r[label] = os.path.relpath(file_r)
+
+rundir = args.rundir
+if os.path.isdir(rundir):
+    if args.overwrite:
+        create = True
+        print "Directory %s found, overwriting..."%rundir
+        shutil.rmtree(rundir)
+        os.mkdir(rundir)
+    else:
+        create = False
+        print "Directory %s found, not overwriting (use -o option to overwrite)..."%rundir
+else:
+    create = True
+    print "Directory %s not found, creating new one..."%rundir
+    os.mkdir(rundir)
+
+config_file_basename = os.path.basename(args.config_file)
+
+for label_l in files_l:
+    for label_r in files_r:
+        file_r = files_r[label_r]
+        workdir = rundir + '/' + label_l + '/' + label_r
+        if create:
+            os.makedirs(workdir)
+            shutil.copyfile(file_l, workdir+'/ligand.mol2')
+            shutil.copyfile(file_r, workdir+'/protein.pdb')
+        new_config_file = workdir + '/' + config_file_basename
+        update_config_file(new_config_file, args.config_file, label_r, args.sitecsv)
