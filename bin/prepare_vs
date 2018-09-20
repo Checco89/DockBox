@@ -12,6 +12,7 @@ parser = argparse.ArgumentParser(description="Prepare files for Docking or Virtu
 parser.add_argument('-f',
     type=str,
     dest='config_file',
+    required=True,
     help='config file: .ini')
 
 parser.add_argument('-r',
@@ -36,7 +37,7 @@ parser.add_argument('-o', '-overwrite',
 parser.add_argument('-s',
     dest='sitecsv',
     type=str,
-    default=None,
+    required=True,
     help='Update binding sites info in config file from file')
 
 parser.add_argument('-w',
@@ -48,13 +49,15 @@ parser.add_argument('-w',
 args = parser.parse_args()
 
 for file_r in args.input_files_r:
-    if not os.path.exists(file_r):
+    if not os.path.isfile(file_r):
         raise ValueError("File %s not found!"%(file_r))
 
 for file_l in args.input_files_l:
-    if not os.path.exists(file_l):
+    if not os.path.isfile(file_l):
         raise ValueError("File %s not found!"%(file_l))
 
+if not os.path.isfile(args.config_file):
+    raise ValueError("Config file %s not found!"%args.config_file)
 
 def update_config_file(new_config_file, config_file, label_r, csvfile):
     """Update binding site parameters in config file"""
@@ -140,7 +143,7 @@ for ft in features:
 for idx, file_l in enumerate(args.input_files_l):
     if os.path.isfile(file_l):
         label = 'lig' + (3-len(str(idx+1)))*'0' + str(idx+1)
-        files_l[label] = [file_l]
+        files_l[label] = file_l
         info['label'].append(label)
         info['filename'].append(os.path.relpath(file_l))
 
@@ -168,8 +171,8 @@ else:
     os.mkdir(rundir)
 
 config_file_basename = os.path.basename(args.config_file)
-
 for label_l in files_l:
+    file_l = files_l[label_l]
     for label_r in files_r:
         file_r = files_r[label_r]
         workdir = rundir + '/' + label_l + '/' + label_r

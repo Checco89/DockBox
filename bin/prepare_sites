@@ -47,8 +47,8 @@ parser.add_argument('-minplb',
 parser.add_argument('-nsitesmax',
     dest='nsitesmax',
     type=int,
-    default=0,
-    help="Maximum number of sites kept")
+    default=1,
+    help="Maximum number of sites kept (default: 1)")
 
 parser.add_argument('-minsize',
     type=float,
@@ -77,16 +77,16 @@ else:
         raise ValueError('Sitefinder option not selected and list of ligand files empty!')
 
 curdir = os.getcwd()
-
 info = {}
-features = ['target', 'center', 'size']
+features = ['target', 'center', 'size', 'site']
+if args.sitefinder:
+    features += ['plb']
 for ft in features:
     info[ft] = []
 
 pwd = os.getcwd()
-
-for idx, file_r in enumerate(args.input_files_r):
-    label = 'target' + (3-len(str(idx+1)))*'0' + str(idx+1)
+for jdx, file_r in enumerate(args.input_files_r):
+    label = 'target' + (3-len(str(jdx+1)))*'0' + str(jdx+1)
 
     file_r_base = os.path.basename(file_r)
     if args.sitefinder:
@@ -111,8 +111,6 @@ for idx, file_r in enumerate(args.input_files_r):
                 if (plb > args.minplb and idx+1 <= args.nsitesmax) or idx==0:
                     info['target'].append(label)
                     line_s = line.split()
-                    if 'plb' not in info:
-                        info['plb'] = []
                     info['plb'].append(plb)
 
                     # get box center
@@ -123,8 +121,6 @@ for idx, file_r in enumerate(args.input_files_r):
                     radius = float(line_s[5])
                     boxsize = max(2*radius,args.minsize)
                     info['size'].append(', '.join(['%.2f'%boxsize for jdx in range(3)]))
-                    if 'site' not in info:
-                        info['site'] = []
                     info['site'].append('%s'%(idx+1))
          os.chdir(pwd)         
     else:
@@ -146,6 +142,7 @@ for idx, file_r in enumerate(args.input_files_r):
         info['target'].append(label)
         info['center'].append(center)
         info['size'].append(', '.join(['%.2f'%boxsize for jdx in range(3)]))
+        info['site'].append('1')
 
 info = pd.DataFrame(info)
 info = info[features].to_csv(args.csvfile, index=False)
