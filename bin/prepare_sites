@@ -6,13 +6,9 @@ import subprocess
 import argparse
 import pandas as pd
 
-from MOBPred import moe
-from mdtools.utility import reader
-from mdtools.utility import utils
+from dockbox import moe
 
-boxsize = 30.0
-
-parser = argparse.ArgumentParser(description="Prepare sites")
+parser = argparse.ArgumentParser(description="Prepare sites, either from known binder locations (-l option) or from binding-site prediction program (-sitefinder option)")
 
 parser.add_argument('-r',
     type=str,
@@ -71,7 +67,7 @@ if args.input_files_l:
 
     nfiles_r = len(args.input_files_r)
     if len(args.input_files_l) != nfiles_r:
-        raise ValueError('Number of sites (%s) should match number of target files (%s)'%(len(args.input_files_l),nfiles_r))
+        raise ValueError('Number of ligand files (%s) should match number of target files (%s)'%(len(args.input_files_l),nfiles_r))
 else:
     if not args.sitefinder:
         raise ValueError('Sitefinder option not selected and list of ligand files empty!')
