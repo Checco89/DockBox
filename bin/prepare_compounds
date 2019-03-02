@@ -1,0 +1,208 @@
+#!/usr/bin/python
+import os
+import sys
+import shutil
+import stat
+import argparse
+import ConfigParser
+import pandas as pd
+import subprocess
+from glob import glob
+
+known_formats = ['.sdf', '.smi', '.mol2']
+parser = argparse.ArgumentParser(description="Prepare compound files for Virtual Screening (1st stage)")
+
+parser.add_argument('-l',
+    type=str,
+    dest='input_files_l',
+    nargs='+',
+    metavar='FILE',
+    help = 'ligand file(s) with possibly many structures. Supported formats: '+', '.join(known_formats))
+
+parser.add_argument('-csv',
+    type=str,
+    dest='csvfile',
+    default='compounds.csv',
+    help='output .csv filename (default: compounds.csv)')
+
+parser.add_argument('-ligprep',
+    dest='ligprep',
+    action='store_true',
+    default=False,
+    help='prepare compounds using ligprep')
+
+parser.add_argument('-flags',
+    type=str,
+    default="-ph 7.0 -pht 2.0 -i 2 -s 8 -t 4",
+    dest='lpflags',
+    metavar='STRING',
+    help='ligprep flags for ligand preparation. Default: "-ph 7.0 -pht 2.0 -i 2 -s 8 -t 4"')
+
+args = parser.parse_args()
+
+def generate_multiple_files_with_babel(file_l, args):
+
+    suffix, ext = os.path.splitext(file_l)
+    if args.ligprep:
+        extout = ext
+    else: # if no ligand preparation, .mol2 files are generated directly
+        extout = '.mol2'
+
+    for fmt in known_formats:
+        if ext == fmt:
+            input_format_flag = '-i' + ext[1:]
+            output_format_flag = '-o' + extout[1:]
+            if fmt in ['smi', 'sdf']:
+                other_flags = '--gen3D'
+            else:
+                other_flags = ''
+    
+    basename = os.path.basename(suffix)
+    output_file = basename + '_' + extout
+
+    # generate multiple files using babel
+    subprocess.check_output('babel %s %s %s %s -m %s 2>/dev/null'%(input_format_flag, file_l, output_format_flag, output_file, other_flags), shell=True)
+
+    output_files = []
+    for idx in range(len(glob(basename+'_*'+extout))):
+        output_files.append(os.path.abspath(basename+'_%s'%(idx+1)+extout))
+
+    return output_files
+
+def prepare_structure_with_ligprep(file_l, flags):
+
+    ext = os.path.splitext(file_l)[1]
+    if ext == '.sdf':
+        input_format_flag = '-isd'
+    elif ext == '.smi':
+        input_format_flag = '-ismi'
+    else:
+        raise IOError("Format .mol2 %s not recognized for ligprep!"%(ext[1:]))
+
+    suffix = (os.path.splitext(file_l)[0]).split('/')[-1]
+    prepared_sdffile = suffix + "_prep.sdf"
+
+    # write ligprep command
+    cmd = "ligprep -WAIT %(flags)s %(input_format_flag)s %(file_l)s -osd %(prepared_sdffile)s"%locals()
+
+    script_name = 'run_ligprep.sh'
+    with open(script_name, 'w') as file:
+        script ="""#!/bin/bash
+%(cmd)s"""% locals()
+        file.write(script)
+    os.chmod(script_name, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH | stat.S_IXUSR)
+
+    # execute ligprep
+    subprocess.check_output('./' + script_name +" &> ligprep.log", shell=True, executable='/bin/bash')
+
+    output_mol2file_model = suffix + '_prep_.mol2'
+    subprocess.check_output('babel -isd %s -omol2 %s -m 2>/dev/null'%(prepared_sdffile, output_mol2file_model), shell=True, executable='/bin/bash')
+
+    mol2files = []
+    for idx in range(len(glob('*_prep_*.mol2'))):
+        mol2files.append(os.path.abspath(suffix + '_prep_%s.mol2'%(idx+1)))
+
+    return mol2files
+
+def get_ligand_name_from_file(file_l):
+
+    suffix, ext = os.path.splitext(file_l)
+    with open(file_l) as ff:
+       if ext == '.sdf':
+           name = ff.next().strip()
+       elif ext == '.smi':
+           name = ff.next().split()[-1]
+       elif ext == '.mol2':
+           for line in ff:
+               #print line
+               if line.startswith('@<TRIPOS>MOLECULE'):
+                   first_atom = True
+                   name = '_'.join(ff.next().split())
+    return name
+
+def get_compounds_number(file_l):
+
+    suffix, ext = os.path.splitext(file_l)
+    if ext == '.sdf':
+        # count number of lines with "M  END"
+        nligs = subprocess.check_output('fgrep -c "M  END" %s'%file_l, shell=True)
+    elif ext == 'smi':
+        # count number of non-blank non-commented lines
+        nligs = subprocess.check_output("awk '!/^#/ && !/^$/{c++}END{print c}' %s"%file_l, shell=True)
+    elif ext == '.mol2':
+        # count number of lines with @<TRIPOS>ATOM
+        nligs = subprocess.check_output('fgrep -c "@<TRIPOS>ATOM" %s'%file_l, shell=True)
+
+    nligs = int(nligs)
+    return nligs
+    
+curdir = os.getcwd()
+
+nligs = 0
+input_files_l = []
+for file_l in args.input_files_l:
+    if os.path.exists(file_l):
+        input_files_l.append(os.path.abspath(file_l))
+        nligs += get_compounds_number(file_l)
+    else:
+        raise ValueError("File %s not found!"%(file_l))
+
+print "%i compounds detected..."%nligs
+if args.ligprep:
+    print "Preparing compounds with LigPrep..."
+else:
+    print "Generating .mol2 files with Babel"
+
+dirname = 'compounds'
+nid_digits = max(3, len(str(nligs)))
+shutil.rmtree(dirname, ignore_errors=True)
+os.mkdir(dirname)
+
+info = {}
+features = ['ligID', 'file_origin', 'mol2file', 'name', 'isomer']
+for ft in features:
+    info[ft] = []
+
+shift = 0
+for file_l in input_files_l:
+    # create tmp directory to store temporary files
+    tmpdir = '.tmp'
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+    os.mkdir(tmpdir)
+    os.chdir(tmpdir)
+
+    # generate multiple files from files provided
+    files_with_single_compound = generate_multiple_files_with_babel(file_l, args)
+    os.chdir(curdir)
+
+    for jdx, file_ls in enumerate(files_with_single_compound):
+        # id of ligand
+        ligid = 'lig' + (nid_digits-len(str(jdx+1)))*'0' + str(jdx+shift+1)
+        dir_l = dirname + '/' + ligid #directory name
+
+        # create ligand directory
+        os.mkdir(dir_l)
+        os.chdir(dir_l)
+
+        # run Schrodinger's ligprep or copy file
+        if args.ligprep:
+            mol2files = prepare_structure_with_ligprep(file_ls, args.lpflags)
+        else:
+            mol2file = os.path.basename(file_ls)
+            shutil.copyfile(file_ls, mol2file)
+            mol2files = [os.path.abspath(mol2file)]
+        os.chdir(curdir)
+
+        for idx, mol2file in enumerate(mol2files):
+            info['ligID'].append(ligid)
+            info['name'].append(get_ligand_name_from_file(mol2file))
+            info['file_origin'].append(os.path.relpath(file_l))
+            info['mol2file'].append(os.path.relpath(mol2file))
+            info['isomer'].append(idx+1)
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
+    shift += jdx
+
+df = pd.DataFrame(info)
+df[features].to_csv(args.csvfile, index=False)

@@ -1,0 +1,105 @@
+#!/usr/bin/python
+import os
+import sys
+import shutil
+import stat
+import argparse
+import subprocess
+import ConfigParser
+from glob import glob
+import pandas as pd
+
+known_formats = ['.pdb']
+parser = argparse.ArgumentParser(description="Prepare target files for Virtual Screening (2nd stage)")
+
+parser.add_argument('-r',
+    type=str,
+    dest='input_files_r',
+    nargs='+',
+    metavar='FILE',
+    help = 'target file(s), one structure per file. Supported formats: '+','.join(known_formats))
+
+parser.add_argument('-csv',
+    type=str,
+    dest='csvfile',
+    default='targets.csv',
+    help='output .csv filename (default: targets.csv)')
+
+parser.add_argument('-prepwizard',
+    dest='prepwizard',
+    action='store_true',
+    default=False,
+    help='prepare targets with prepwizard')
+
+parser.add_argument('-flags',
+    type=str,
+    default="-fix -pH \'neutral\'",
+    dest='prepwizard_flags',
+    metavar='STRING',
+    help='prepwizard flags for protein preparation. Default: "-fix -pH \'neutral\'"')
+
+args = parser.parse_args()
+
+def prepare_structure_with_prepwizard(file_r, flags):
+
+    # find new file name
+    new_file_r = os.path.basename(file_r)
+    pref, ext = os.path.splitext(new_file_r)
+    new_file_r = pref + '_prep.pdb'
+
+    # write ligprep command
+    cmd = "prepwizard -WAIT %(flags)s %(file_r)s %(new_file_r)s"%locals()
+    script_name = 'run_prepwizard.sh'
+    with open(script_name, 'w') as file:
+        script ="""#!/bin/bash
+%(cmd)s"""% locals()
+        file.write(script)
+    os.chmod(script_name, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH | stat.S_IXUSR)
+
+    subprocess.check_output('./' + script_name + " &> recprep.log", shell=True, executable='/bin/bash')
+    return os.path.abspath(new_file_r)
+
+curdir = os.getcwd()
+
+input_files_r = []
+for file_r in args.input_files_r:
+    if os.path.exists(file_r):
+        input_files_r.append(os.path.abspath(file_r))
+    else:
+        raise ValueError("File %s not found!"%(file_r))
+
+ntargets = len(input_files_r)
+
+dirname = 'targets'
+nid_digits = max(3, len(str(ntargets)))
+shutil.rmtree(dirname, ignore_errors=True)
+os.mkdir(dirname)
+
+info = {}
+features = ['targetID', 'file_origin', 'pdbfile']
+for ft in features:
+    info[ft] = []
+
+for idx, file_r in enumerate(input_files_r):
+    targetid = 'target' + (nid_digits-len(str(idx+1)))*'0' + str(idx+1)
+    dir_r = dirname + '/' + targetid
+
+    # create target directory
+    os.mkdir(dir_r)
+    os.chdir(dir_r)
+
+    if args.prepwizard:
+        pdbfile = prepare_structure_with_prepwizard(file_r, args.prepwizard_flags)
+    else:
+        pdbfile = os.path.basename(file_r)
+        shutil.copyfile(file_r, pdbfile)
+        pdbfile = os.path.abspath(pdbfile)
+
+    os.chdir(curdir)
+
+    info['targetID'].append(targetid)
+    info['file_origin'].append(os.path.relpath(file_r))
+    info['pdbfile'].append(os.path.relpath(pdbfile))
+
+info = pd.DataFrame(info)
+info[features].to_csv(args.csvfile, index=False)

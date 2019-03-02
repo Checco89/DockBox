@@ -7,12 +7,13 @@ import ConfigParser
 import pandas as pd
 from glob import glob
 
-parser = argparse.ArgumentParser(description="Prepare files for Docking or Virtual Screening")
+parser = argparse.ArgumentParser(description="Build directories and config files for Virtual Screening (4th stage)")
 
 parser.add_argument('-f',
     type=str,
     dest='config_file',
     required=True,
+    metavar='FILE',
     help='config file: .ini')
 
 parser.add_argument('-r',
@@ -20,31 +21,35 @@ parser.add_argument('-r',
     dest='input_files_r',
     nargs='+',
     required=True,
-    help = 'Target files: .pdb')
+    metavar='FILE',
+    help = 'target file(s): .pdb, .csv')
 
 parser.add_argument('-l',
     type=str,
     dest='input_files_l',
     nargs='+',
-    help='PDB files containing the ligand!')
+    metavar='FILE',
+    help='ligand file(s): .mol2, .csv')
 
 parser.add_argument('-o', '-overwrite',
     action='store_true',
     dest='overwrite',
     default=False,
-    help='Overwrite previous folders')
+    help='overwrite previous folders')
 
 parser.add_argument('-s',
     dest='sitecsv',
     type=str,
     required=True,
-    help='Update binding sites info in config file from file')
+    metavar='FILE',
+    help='csvfile with binding sites: .csv')
 
 parser.add_argument('-w',
     dest='rundir',
     type=str,
     default='run',
-    help='Run directory for virtual screening')
+    metavar='DIRECTORY NAME',
+    help='name of directory created for virtual screening')
 
 args = parser.parse_args()
 

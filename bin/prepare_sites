@@ -6,71 +6,94 @@ import subprocess
 import argparse
 import pandas as pd
 
+from mdtools.utility import utils
+from mdtools.utility import reader
 from dockbox import moe
 
-parser = argparse.ArgumentParser(description="Prepare sites, either from known binder locations (-l option) or from binding-site prediction program (-sitefinder option)")
+parser = argparse.ArgumentParser(description="Prepare sites for Virtual Screening (3rd stage)")
 
 parser.add_argument('-r',
     type=str,
     dest='input_files_r',
     nargs='+',
-    required=True,
-    help = 'Target files: .pdb')
+    metavar='FILE',
+    default=['targets.csv'],
+    help = 'target file(s): .pdb, .csv')
 
-parser.add_argument('-l',
-    type=str,
-    dest='input_files_l',
-    nargs='+',
-    help='PDB files containing the ligand, used to predict the binding site')
-
-parser.add_argument('-sitefinder',
+parser.add_argument('-blankcsv',
     action='store_true',
     default=False,
-    help='Use moe sitefinder to find the binding sites')
+    help='create an empty csvfile to be completed with binding sites location and size')
 
 parser.add_argument('-csv',
     type=str,
     dest='csvfile',
     default='sites.csv',
-    help='CSV file name')
+    help='output .csv filename (default: sites.csv)')
 
 parser.add_argument('-minplb',
     dest='minplb',
     type=float,
     default=1.0,
-    help="Minimimum PLB value to consider")
+    metavar='VALUE',
+    help="minimimum PLB value to consider (default: 1.0)")
+
+parser.add_argument('-minsize',
+    type=float,
+    dest='minsize',
+    default=30.0,
+    metavar='VALUE', 
+    help = 'minimum size for the box (default: 30.0 (A))')
 
 parser.add_argument('-nsitesmax',
     dest='nsitesmax',
     type=int,
     default=1,
-    help="Maximum number of sites kept (default: 1)")
+    metavar='VALUE',
+    help="maximum number of sites kept (default: 1)")
 
-parser.add_argument('-minsize',
-    type=float,
-    dest='minsize',
-    default = 30.0,
-    help = 'Min size for the box')
+parser.add_argument('-l',
+    type=str,
+    dest='input_files_l',
+    nargs='+',
+    metavar='FILE',
+    help='PDB files containing a binding molecule, used to predict the binding site')
+
+parser.add_argument('-sitefinder',
+    action='store_true',
+    default=False,
+    help="use MOE's Site Finder to find the binding sites")
 
 args = parser.parse_args()
 
-for file_r in args.input_files_r:
-    if not os.path.exists(file_r):
-        raise ValueError("File %s not found!"%(file_r))
+input_files_r = []
+exts = list(set([os.path.splitext(ff)[1] for ff in args.input_files_r]))
 
-if args.input_files_l:
-    if args.sitefinder:
-        raise ValueError('Sitefinder option selected and list of ligand files provided!')
-    for file_l in args.input_files_l:
-        if not os.path.exists(file_l):
-            raise ValueError("File %s not found!"%(file_l))
+if len(exts) != 1: # if more than one extension provided
+    raise ValueError("All files specified with -r option must have the same extension!")
 
-    nfiles_r = len(args.input_files_r)
-    if len(args.input_files_l) != nfiles_r:
-        raise ValueError('Number of ligand files (%s) should match number of target files (%s)'%(len(args.input_files_l),nfiles_r))
+if exts[0] == '.pdb': # if input files are pdbfiles
+    for file_r in args.input_files_r:
+        if os.path.exists(file_r):
+            input_files_r.append(os.path.abspath(file_r))
+        else:
+            raise ValueError("File %s not found!"%(file_r))
+    ntargets = len(input_files_r)
+    nid_digits = max(3, len(str(ntargets)))
+    targetids = []
+    for jdx, file_r in enumerate(input_files_r):
+        targetids.append('target'+(nid_digits-len(str(jdx+1)))*'0' + str(jdx+1))
+
+elif exts[0] == '.csv': # if input files is the csvfile
+    if len(args.input_files_r) != 1:
+        raise ValueError("More than 1 csvfile specified with -r option.")
+    df_targets = pd.read_csv(args.input_files_r[0])
+    input_files_r = [os.path.abspath(ff) for ff in list(df_targets['pdbfile'])]
+    ntargets = len(input_files_r)
+    targetids = list(df_targets['targetID'])
+
 else:
-    if not args.sitefinder:
-        raise ValueError('Sitefinder option not selected and list of ligand files empty!')
+    raise IOError("Extension not recognized!")
 
 curdir = os.getcwd()
 info = {}
@@ -80,22 +103,40 @@ if args.sitefinder:
 for ft in features:
     info[ft] = []
 
-pwd = os.getcwd()
-for jdx, file_r in enumerate(args.input_files_r):
-    label = 'target' + (3-len(str(jdx+1)))*'0' + str(jdx+1)
+if args.blankcsv:
+    blank_info = {'target': targetids, 'center': ['x, y, z']*ntargets, 'size': ['x, y, z']*ntargets, 'site': [1]*ntargets}
+    df = pd.DataFrame(blank_info)
+    df[features].to_csv(args.csvfile, index=False)
+    sys.exit(0)
 
-    file_r_base = os.path.basename(file_r)
+if args.input_files_l:
     if args.sitefinder:
-         dir_r = os.path.dirname(file_r)
-         if not dir_r:
-             dir_r = '.'
-         sitedir_r = dir_r+'/sitefinder'
-         shutil.rmtree(sitedir_r, ignore_errors=True)
+        raise ValueError('Site Finder option selected and list of ligand files provided!')
+    for file_l in args.input_files_l:
+        if not os.path.exists(file_l):
+            raise ValueError("File %s not found!"%(file_l))
+    nfiles_r = len(input_files_r)
+    if len(args.input_files_l) != nfiles_r:
+        raise ValueError('Number of ligand files (%s) should match number of target files (%s)'%(len(args.input_files_l),nfiles_r))
+else:
+    if args.sitefinder:
+        sitedir = 'sitefinder'
+        shutil.rmtree(sitedir, ignore_errors=True)
+        os.mkdir(sitedir)
+    else:
+        raise ValueError('Sitefinder option not selected and list of ligand files empty!')
+
+pwd = os.getcwd()
+for jdx, file_r in enumerate(input_files_r):
+    targetid = targetids[jdx]
+
+    if args.sitefinder:
+         sitedir_r = sitedir + '/' + targetid
          os.mkdir(sitedir_r)
          os.chdir(sitedir_r)
 
          # use moe sitefinder
-         moe.write_sitefinder_script('run_site_finder.sh', '../'+file_r_base, args)
+         moe.write_sitefinder_script('run_site_finder.sh', file_r, args)
          subprocess.check_call('bash run_site_finder.sh', shell=True)
          with open('moebatch.log', 'r') as ff:
             ff.next()
@@ -105,7 +146,7 @@ for jdx, file_r in enumerate(args.input_files_r):
                 plb = float(line_s[1])
 
                 if (plb > args.minplb and idx+1 <= args.nsitesmax) or idx==0:
-                    info['target'].append(label)
+                    info['target'].append(targetid)
                     line_s = line.split()
                     info['plb'].append(plb)
 
@@ -118,9 +159,9 @@ for jdx, file_r in enumerate(args.input_files_r):
                     boxsize = max(2*radius,args.minsize)
                     info['size'].append(', '.join(['%.2f'%boxsize for jdx in range(3)]))
                     info['site'].append('%s'%(idx+1))
-         os.chdir(pwd)         
+         os.chdir(pwd)    
     else:
-        file_l = args.input_files_l[idx]
+        file_l = args.input_files_l[jdx]
         rpdb = reader.open(file_l)
         coords = []
 
@@ -135,10 +176,10 @@ for jdx, file_r in enumerate(args.input_files_r):
 
         cog = utils.center_of_geometry(coords)
         center = ', '.join(['%.2f'%float(x) for x in cog])
-        info['target'].append(label)
+        info['target'].append(targetid)
         info['center'].append(center)
-        info['size'].append(', '.join(['%.2f'%boxsize for jdx in range(3)]))
+        info['size'].append(', '.join(['%.2f'%args.minsize for kdx in range(3)]))
         info['site'].append('1')
 
 info = pd.DataFrame(info)
-info = info[features].to_csv(args.csvfile, index=False)
+info[features].to_csv(args.csvfile, index=False)
