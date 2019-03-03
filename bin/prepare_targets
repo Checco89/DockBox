@@ -4,9 +4,9 @@ import sys
 import shutil
 import stat
 import argparse
+from glob import glob
 import subprocess
 import ConfigParser
-from glob import glob
 import pandas as pd
 
 known_formats = ['.pdb']

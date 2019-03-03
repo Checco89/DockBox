@@ -4,8 +4,8 @@ import sys
 import shutil
 import argparse
 import ConfigParser
-import pandas as pd
 from glob import glob
+import pandas as pd
 
 parser = argparse.ArgumentParser(description="Build directories and config files for Virtual Screening (4th stage)")
 

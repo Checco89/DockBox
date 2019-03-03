@@ -3,11 +3,11 @@ import os
 import sys
 import shutil
 import stat
+import subprocess
+from glob import glob
 import argparse
 import ConfigParser
 import pandas as pd
-import subprocess
-from glob import glob
 
 known_formats = ['.sdf', '.smi', '.mol2']
 parser = argparse.ArgumentParser(description="Prepare compound files for Virtual Screening (1st stage)")
