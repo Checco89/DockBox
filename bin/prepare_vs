@@ -9,57 +9,137 @@ import pandas as pd
 
 parser = argparse.ArgumentParser(description="Build directories and config files for Virtual Screening (4th stage)")
 
-parser.add_argument('-f',
-    type=str,
-    dest='config_file',
-    required=True,
-    metavar='FILE',
-    help='config file: .ini')
-
-parser.add_argument('-r',
-    type=str,
-    dest='input_files_r',
-    nargs='+',
-    required=True,
-    metavar='FILE',
-    help = 'target file(s): .pdb, .csv')
-
 parser.add_argument('-l',
     type=str,
     dest='input_files_l',
     nargs='+',
     metavar='FILE',
-    help='ligand file(s): .mol2, .csv')
+    default=['compounds.csv'],
+    help='ligand file(s): .mol2, .csv (default: compounds.csv)')
 
-parser.add_argument('-o', '-overwrite',
+parser.add_argument('-r',
+    type=str,
+    dest='input_files_r',
+    nargs='+',
+    metavar='FILE',
+    default=['targets.csv'], 
+    help = 'target file(s): .pdb, .csv (default: targets.csv)')
+
+parser.add_argument('-f',
+    type=str,
+    dest='config_file',
+    metavar='FILE',
+    default='config.ini',
+    help='config file: .ini')
+
+parser.add_argument('-copy',
     action='store_true',
-    dest='overwrite',
+    dest='copy',
     default=False,
-    help='overwrite previous folders')
+    help='Copy input files into folders (not recommended for large libraries)')
 
 parser.add_argument('-s',
     dest='sitecsv',
     type=str,
-    required=True,
     metavar='FILE',
-    help='csvfile with binding sites: .csv')
+    default='sites.csv',
+    help='csvfile with binding sites: .csv (default: sites.csv)')
 
 parser.add_argument('-w',
     dest='rundir',
     type=str,
-    default='run',
+    default='vs',
     metavar='DIRECTORY NAME',
     help='name of directory created for virtual screening')
 
+def get_number_of_compounds(file_l):
+    suffix, ext = os.path.splitext(file_l)
+    if ext == '.mol2':
+        # count number of lines with @<TRIPOS>ATOM
+        nligs = subprocess.check_output('fgrep -c "@<TRIPOS>ATOM" %s'%file_l, shell=True)
+    else:
+        raise IOError("Extension not recognized for ligand file!")
+
+    nligs = int(nligs)
+    return nligs
+
 args = parser.parse_args()
 
-for file_r in args.input_files_r:
-    if not os.path.isfile(file_r):
-        raise ValueError("File %s not found!"%(file_r))
+exts = list(set([os.path.splitext(ff)[1] for ff in args.input_files_r]))
+if len(exts) != 1: # if more than one extension provided
+    raise ValueError("All files specified with -r option must have the same extension!")
 
-for file_l in args.input_files_l:
-    if not os.path.isfile(file_l):
-        raise ValueError("File %s not found!"%(file_l))
+# check target input files
+input_files_r = []
+if exts[0] == '.pdb': # if input files are pdbfiles
+    for file_r in args.input_files_r:
+        if os.path.exists(file_r):
+            input_files_r.append(os.path.abspath(file_r))
+        else:
+            raise ValueError("File %s not found!"%(file_r))
+
+    ntargets = len(input_files_r)
+    nid_digits = max(3, len(str(ntargets)))
+    targetids = []
+
+    for jdx, file_r in enumerate(input_files_r):
+        targetids.append('target'+(nid_digits-len(str(jdx+1)))*'0' + str(jdx+1))
+    is_csvfile_r = False
+elif exts[0] == '.csv': # if input files is the csvfile
+    if len(args.input_files_r) != 1:
+        raise ValueError("More than 1 csvfile specified with -r option.")
+
+    df_targets = pd.read_csv(args.input_files_r[0])
+    input_files_r = [os.path.abspath(ff) for ff in list(df_targets['pdbfile'])]
+    ntargets = len(input_files_r)
+    targetids = list(df_targets['targetID'])
+    is_csvfile_r = True
+else:
+    raise IOError("Extension of files used with -r option not recognized!")
+
+exts_l = list(set([os.path.splitext(ff)[1] for ff in args.input_files_l]))
+if len(exts_l) != 1: # if more than one extension provided
+    raise ValueError("All files specified with -l option must have the same extension!")
+
+# check ligand input files
+input_files_l = []
+if exts_l[0] == '.mol2': # if input files are .mol2
+    for file_l in args.input_files_l:
+        if os.path.exists(file_l):
+            input_files_l.append(os.path.abspath(file_l))
+        else:
+            raise ValueError("File %s not found!"%(file_l))
+
+    nligands = len(input_files_l)
+    nid_digits = max(3, len(str(nligands)))
+    ligandids = []
+
+    for jdx, file_r in enumerate(input_files_l): 
+        nligands_file_l = get_number_of_compounds(file_l)
+        if nligands_file_l == 1:
+            ligandids.append('lig'+(nid_digits-len(str(jdx+1)))*'0' + str(jdx+1))
+        else:
+            raise IOError("Every ligand file should contain at least 1 structure, or use the prepare_compounds routine!")
+    is_csvfile_l = False
+    use_isomer_folder = False
+
+elif exts_l[0] == '.csv': # if input files is a csvfile
+    if len(args.input_files_l) != 1:
+        raise ValueError("More than 1 csvfile specified with -l option.")
+
+    df_ligands = pd.read_csv(args.input_files_l[0])
+    input_files_l = [os.path.abspath(ff) for ff in list(df_ligands['mol2file'])]
+    nligands = len(input_files_l)
+    ligandids = list(df_ligands['ligID'])
+    isomers = list(df_ligands['isomer'])
+
+    is_csvfile_l = True
+    if all(x==1 for x in isomers):
+        use_isomer_folder = False
+    else:
+        use_isomer_folder = True
+else:
+    raise IOError("Extension of files used with -r option not recognized!")
 
 if not os.path.isfile(args.config_file):
     raise ValueError("Config file %s not found!"%args.config_file)
@@ -139,51 +219,51 @@ boxsize = %(boxsize_conf)s"""% locals()
                     tmpf.write(newsite_section+'\n')
     shutil.move(tmp_config_file, new_config_file)
 
-files_l = {}
-info = {}
-features = ['label', 'filename']
-for ft in features:
-    info[ft] = []
-
-for idx, file_l in enumerate(args.input_files_l):
-    if os.path.isfile(file_l):
-        label = 'lig' + (3-len(str(idx+1)))*'0' + str(idx+1)
-        files_l[label] = file_l
-        info['label'].append(label)
-        info['filename'].append(os.path.relpath(file_l))
-
-info = pd.DataFrame(info)
-info = info[features].to_csv('compounds.csv', index=False)
-
-files_r = {}
-for idx, file_r in enumerate(args.input_files_r):
-    label = 'target' + (3-len(str(idx+1)))*'0' + str(idx+1)
-    files_r[label] = os.path.relpath(file_r)
-
 rundir = args.rundir
-if os.path.isdir(rundir):
-    if args.overwrite:
-        create = True
-        print "Directory %s found, overwriting..."%rundir
-        shutil.rmtree(rundir)
-        os.mkdir(rundir)
-    else:
-        create = False
-        print "Directory %s found, not overwriting (use -o option to overwrite)..."%rundir
-else:
-    create = True
-    print "Directory %s not found, creating new one..."%rundir
-    os.mkdir(rundir)
+
+# always overwrite by default
+shutil.rmtree(rundir, ignore_errors=True)
+os.mkdir(rundir)
 
 config_file_basename = os.path.basename(args.config_file)
-for label_l in files_l:
-    file_l = files_l[label_l]
-    for label_r in files_r:
-        file_r = files_r[label_r]
-        workdir = rundir + '/' + label_l + '/' + label_r
-        if create:
-            os.makedirs(workdir)
+for jdx, file_l in enumerate(input_files_l):
+    ligid = ligandids[jdx]
+    for idx, file_r in enumerate(input_files_r):
+        recid = targetids[idx]
+        if use_isomer_folder:
+            workdir = rundir + '/' + ligid + '/' + recid + '/isomer' + str(isomers[jdx])
+        else:
+            workdir = rundir + '/' + ligid + '/' + recid
+
+        os.makedirs(workdir)
+        if args.copy:
             shutil.copyfile(file_l, workdir+'/ligand.mol2')
             shutil.copyfile(file_r, workdir+'/protein.pdb')
+            script = """#!/bin/bash
+#SBATCH --time=100-00:00
+#SBATCH --partition=serial
+#SBATCH --job-name="l%st%s"
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --nodes=1
+
+set -e\n
+rundock -f config.ini -l ligand.mol2 -r protein.pdb
+"""%(ligid[3:],recid[6:])
+        else:
+            script = """#!/bin/bash
+#SBATCH --time=100-00:00
+#SBATCH --partition=serial
+#SBATCH --job-name="l%st%s"
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --nodes=1
+
+set -e\n
+rundock -f config.ini -l %s -r %s
+"""%(ligid[3:],recid[6:], file_l, file_r)
+        with open(workdir+"/run.slurm", 'w') as slurmf:
+            slurmf.write(script)
+        # write config file
         new_config_file = workdir + '/' + config_file_basename
-        update_config_file(new_config_file, args.config_file, label_r, args.sitecsv)
+        update_config_file(new_config_file, args.config_file, recid, args.sitecsv)

@@ -94,7 +94,6 @@ for idx, file_r in enumerate(input_files_r):
         pdbfile = os.path.basename(file_r)
         shutil.copyfile(file_r, pdbfile)
         pdbfile = os.path.abspath(pdbfile)
-
     os.chdir(curdir)
 
     info['targetID'].append(targetid)

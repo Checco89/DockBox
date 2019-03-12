@@ -126,7 +126,7 @@ def get_compounds_number(file_l):
     if ext == '.sdf':
         # count number of lines with "M  END"
         nligs = subprocess.check_output('fgrep -c "M  END" %s'%file_l, shell=True)
-    elif ext == 'smi':
+    elif ext == '.smi':
         # count number of non-blank non-commented lines
         nligs = subprocess.check_output("awk '!/^#/ && !/^$/{c++}END{print c}' %s"%file_l, shell=True)
     elif ext == '.mol2':
