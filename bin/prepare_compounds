@@ -178,7 +178,8 @@ for file_l in input_files_l:
 
     for jdx, file_ls in enumerate(files_with_single_compound):
         # id of ligand
-        ligid = 'lig' + (nid_digits-len(str(jdx+1)))*'0' + str(jdx+shift+1)
+        kdx = jdx + shift + 1
+        ligid = 'lig' + (nid_digits-len(str(kdx)))*'0' + str(kdx)
         dir_l = dirname + '/' + ligid #directory name
 
         # create ligand directory
@@ -202,7 +203,7 @@ for file_l in input_files_l:
             info['isomer'].append(idx+1)
 
     shutil.rmtree(tmpdir, ignore_errors=True)
-    shift += jdx
+    shift = kdx
 
 df = pd.DataFrame(info)
 df[features].to_csv(args.csvfile, index=False)
