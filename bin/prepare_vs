@@ -32,6 +32,12 @@ parser.add_argument('-f',
     default='config.ini',
     help='config file: .ini')
 
+parser.add_argument('-build_scripts',
+    action='store_true',
+    dest='build_scripts',
+    default=False,
+    help='Build scripts to be submitted to SLURM scheduler')
+
 parser.add_argument('-copy',
     action='store_true',
     dest='copy',
@@ -52,6 +58,29 @@ parser.add_argument('-w',
     metavar='DIRECTORY NAME',
     help='name of directory created for virtual screening')
 
+others = parser.add_argument_group('arguments to build scripts')
+
+others.add_argument('-p',
+    dest='partition',
+    type=str,
+    default='serial',
+    metavar='NAME',
+    help='SLURM Partition name.')
+
+others.add_argument('-t',
+    dest='time',
+    type=str,
+    default='24:00:00',
+    metavar='TIME',
+    help='Approx. time needed for a single job in hh:mm:ss or dd-hh:mm format!')
+
+others.add_argument('-wt',
+    dest='walltime',
+    type=str,
+    default='24:00:00',
+    metavar='WALLTIME',
+    help='Max. walltime in hh:mm:ss or dd-hh:mm format used for slurm scripts (default: 24:00:00)')
+
 def get_number_of_compounds(file_l):
     suffix, ext = os.path.splitext(file_l)
     if ext == '.mol2':
@@ -62,6 +91,65 @@ def get_number_of_compounds(file_l):
 
     nligs = int(nligs)
     return nligs
+
+def slurm_to_seconds(string):
+
+    # check if days are provided
+    string_s = string.split("-")
+    if len(string_s) == 2:
+        days = int(string_s[0])
+        string_s_s = string_s[1].split(":")
+        if len(string_s_s) == 2:
+            hours = int(string_s_s[0])
+            minutes = int(string_s_s[1])
+        elif len(string_s_s) == 1:
+            hours = int(string_s_s[0])
+            minutes = 0
+        else:
+            raise Exception("SLURM time format %s not recognized"%string)
+        seconds = 0
+    elif len(string_s) == 1:
+        string_s_s = string_s[0].split(":")
+        days = 0
+        if len(string_s_s) == 3:
+            hours = int(string_s_s[0])
+            minutes = int(string_s_s[1])
+            seconds = int(string_s_s[2])
+        elif len(string_s_s) == 2:
+            hours = int(string_s_s[0])
+            minutes = int(string_s_s[1])
+            seconds = 0
+        else:
+            raise Exception("SLURM time format %s not recognized"%string)
+
+    time = days*24*3600 + hours*3600 + minutes*60 + seconds
+    return time
+
+def seconds_to_slurm(seconds):
+
+    days = seconds/(24*3600)
+    hours = (time - days*24*3600)/3600 
+    minutes = (time - days*24*3600 - hours*3600)/60
+    seconds = time - days*24*3600 - hours*3600 - minutes*60
+
+    if seconds != 0:
+        minutes += 1
+        seconds = 0
+
+    days_str = str(days)
+    hours_str = str(hours)
+    minutes_str = str(minutes)
+
+    if len(hours_str) == 1:
+        hours_str = '0' + hours_str
+    if len(minutes_str) == 1: 
+        minutes_str = '0' + minutes_str
+
+    if days_str == '0':
+       slurm_time = '%s-%s:%s'%(days_str, hours_str, minutes_str)
+    else:
+       slurm_time = '%s:%s:00'%(hours_str, minutes_str)
+    return slurm_time
 
 args = parser.parse_args()
 
@@ -226,9 +314,23 @@ shutil.rmtree(rundir, ignore_errors=True)
 os.mkdir(rundir)
 
 config_file_basename = os.path.basename(args.config_file)
-for jdx, file_l in enumerate(input_files_l):
+
+# copy config files
+configdir = 'config'
+shutil.rmtree(configdir, ignore_errors=True)
+os.mkdir(configdir)
+config_suff, config_ext = os.path.splitext(config_file_basename)
+
+config_files = []
+for idx, file_r in enumerate(input_files_r):
+    recid = targetids[idx]
+    new_config_file = configdir + '/' + config_suff + '_%s'%(idx+1) + config_ext
+    update_config_file(new_config_file, args.config_file, recid, args.sitecsv)
+    config_files.append(new_config_file)
+
+for jdx in range(nligands): #, file_l in enumerate(input_files_l):
     ligid = ligandids[jdx]
-    for idx, file_r in enumerate(input_files_r):
+    for idx in range(ntargets): # file_r in enumerate(input_files_r):
         recid = targetids[idx]
         if use_isomer_folder:
             workdir = rundir + '/' + ligid + '/' + recid + '/isomer' + str(isomers[jdx])
@@ -236,34 +338,94 @@ for jdx, file_l in enumerate(input_files_l):
             workdir = rundir + '/' + ligid + '/' + recid
 
         os.makedirs(workdir)
-        if args.copy:
-            shutil.copyfile(file_l, workdir+'/ligand.mol2')
-            shutil.copyfile(file_r, workdir+'/protein.pdb')
-            script = """#!/bin/bash
-#SBATCH --time=100-00:00
-#SBATCH --partition=serial
-#SBATCH --job-name="l%st%s"
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --nodes=1
+        # create list of relative paths for targets and receptors
+        if jdx == 0 and idx == 0:
+            input_files_l_rel = []
+            for file_l in input_files_l:
+                input_files_l_rel.append(os.path.relpath(file_l, workdir))
 
-set -e\n
+            input_files_r_rel = []
+            for file_r in input_files_r:
+                input_files_r_rel.append(os.path.relpath(file_r, workdir))
+
+            config_files_rel = []
+            for file_c in config_files:
+                config_files_rel.append(os.path.relpath(file_c, workdir))
+
+        if args.copy:
+            shutil.copyfile(input_files_l[jdx], workdir+'/ligand.mol2')
+            shutil.copyfile(input_files_r[idx], workdir+'/protein.pdb')
+            shutil.copyfile(config_files[idx], workdir+'/config.ini')
+            script = """#!/bin/bash
 rundock -f config.ini -l ligand.mol2 -r protein.pdb
-"""%(ligid[3:],recid[6:])
+"""
         else:
             script = """#!/bin/bash
-#SBATCH --time=100-00:00
-#SBATCH --partition=serial
-#SBATCH --job-name="l%st%s"
+rundock -f %s -l %s -r %s
+"""%(config_files_rel[idx], input_files_l_rel[jdx], input_files_r_rel[idx])
+        with open(workdir+"/run.slurm", 'w') as slurmf:
+            slurmf.write(script)
+
+if args.build_scripts:
+    # create jobs to be submitted
+    single_job_time_sec = slurm_to_seconds(args.time)
+    walltime_sec = slurm_to_seconds(args.walltime)
+    
+    time_all_targets = single_job_time_sec*ntargets
+    
+    if use_isomer_folder:
+        isomerdir = '/isomer*'
+    else:
+        isomerdir = ''
+    
+    scriptdir = 'to_submit'
+    shutil.rmtree(scriptdir, ignore_errors=True)
+    os.mkdir(scriptdir)
+    
+    if time_all_targets < walltime_sec:
+        nligands_per_job = int(walltime_sec/time_all_targets)
+        nscripts = nligands/nligands_per_job
+    
+        for idx in range(nscripts):
+            first = ligandids[idx*nligands_per_job]
+            last = ligandids[(idx+1)*nligands_per_job-1]
+            with open(scriptdir+'/run_vs_%i.slurm'%(idx+1), 'w') as ff:
+                ff.write("""#!/bin/bash
+#SBATCH --time=%s
+#SBATCH --partition=%s
+#SBATCH --job-name="vs%s"
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --nodes=1
 
-set -e\n
-rundock -f config.ini -l %s -r %s
-"""%(ligid[3:],recid[6:], file_l, file_r)
-        with open(workdir+"/run.slurm", 'w') as slurmf:
-            slurmf.write(script)
-        # write config file
-        new_config_file = workdir + '/' + config_file_basename
-        update_config_file(new_config_file, args.config_file, recid, args.sitecsv)
+dirs=`echo lig{%s..%s}`
+curdir=`pwd`
+
+for dir in $dirs/target*%s; do
+  cd $dir
+  bash run.slurm
+  cd $curdir
+done\n"""%(args.walltime, args.partition, idx+1, first[3:], last[3:], isomerdir))
+
+        nligands_last_job = nligands - nscripts*nligands_per_job
+ 
+        if nligands_last_job != 0:
+            first = ligandids[nscripts*nligands_per_job]
+            last = ligandids[-1]
+            with open(scriptdir+'/run_vs_%i.slurm'%(nscripts+1), 'w') as ff:
+                ff.write("""#!/bin/bash
+#SBATCH --time=%s
+#SBATCH --partition=%s
+#SBATCH --job-name="vs%s"
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --nodes=1
+
+dirs=`echo lig{%s..%s}`
+curdir=`pwd`
+
+for dir in $dirs/target*%s; do
+  cd $dir
+  bash run.slurm
+  cd $curdir
+done\n"""%(args.walltime, args.partition, nscripts+1, first[3:], last[3:], isomerdir))

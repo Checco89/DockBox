@@ -6,8 +6,8 @@ import subprocess
 import argparse
 import pandas as pd
 
-from mdtools.utility import reader
-from mdtools.utility import utils
+from mdkit.utility import reader
+from mdkit.utility import utils
 from dockbox import moe
 
 parser = argparse.ArgumentParser(description="Prepare sites for Virtual Screening (3rd stage)")
