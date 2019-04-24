@@ -77,7 +77,7 @@ def prepare_structure_with_ligprep(file_l, flags):
     elif ext == '.smi':
         input_format_flag = '-ismi'
     else:
-        raise IOError("Format .mol2 %s not recognized for ligprep!"%(ext[1:]))
+        raise IOError("Format %s not recognized for ligprep!"%ext)
 
     suffix = (os.path.splitext(file_l)[0]).split('/')[-1]
     prepared_sdffile = suffix + "_prep.sdf"
