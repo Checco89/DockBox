@@ -422,7 +422,7 @@ done\n"""%(args.walltime, args.partition, idx+1, ' '.join(workdirs)))
             idx_last = nscripts*nligands_per_job + nligands_last_job
 
             workdirs = []
-            for jdx in range(idx_first, idx_last+1):
+            for jdx in range(idx_first, idx_last):
                 dir = args.rundir + '/' + ligandids[jdx] + '/target*'
                 if use_isomer_folder:
                     dir += '/isomer' + str(isomers[jdx])
@@ -440,7 +440,7 @@ done\n"""%(args.walltime, args.partition, idx+1, ' '.join(workdirs)))
 dirs=`echo %s`
 curdir=`pwd`
 
-for dir in $dirs/target*%s; do
+for dir in $dirs; do
   cd $dir
   bash run.slurm
   cd $curdir
