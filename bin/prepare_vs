@@ -382,7 +382,7 @@ if args.build_scripts:
     shutil.rmtree(scriptdir, ignore_errors=True)
     os.mkdir(scriptdir)
     
-    if time_all_targets < walltime_sec:
+    if time_all_targets <= walltime_sec:
         nligands_per_job = int(walltime_sec/time_all_targets)
         nscripts = nligands/nligands_per_job
     
