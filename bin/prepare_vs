@@ -51,6 +51,13 @@ parser.add_argument('-s',
     default='sites.csv',
     help='csvfile with binding sites: .csv (default: sites.csv)')
 
+parser.add_argument('-vs',
+    dest='vs_instance',
+    type=str,
+    metavar='INSTANCE',
+    default=None,
+    help='Optimize for Virtual Screening (generate and remove folders on the go)')
+
 parser.add_argument('-w',
     dest='rundir',
     type=str,
@@ -337,7 +344,9 @@ for jdx in range(nligands): #, file_l in enumerate(input_files_l):
         else:
             workdir = rundir + '/' + ligid + '/' + recid
 
-        os.makedirs(workdir)
+        if not args.vs_instance:
+            os.makedirs(workdir)
+
         # create list of relative paths for targets and receptors
         if jdx == 0 and idx == 0:
             input_files_l_rel = []
@@ -352,19 +361,21 @@ for jdx in range(nligands): #, file_l in enumerate(input_files_l):
             for file_c in config_files:
                 config_files_rel.append(os.path.relpath(file_c, workdir))
 
-        if args.copy:
-            shutil.copyfile(input_files_l[jdx], workdir+'/ligand.mol2')
-            shutil.copyfile(input_files_r[idx], workdir+'/protein.pdb')
-            shutil.copyfile(config_files[idx], workdir+'/config.ini')
-            script = """#!/bin/bash
+        if not args.vs_instance:
+            if args.copy and not args.vs_instance:
+                shutil.copyfile(input_files_l[jdx], workdir+'/ligand.mol2')
+                shutil.copyfile(input_files_r[idx], workdir+'/protein.pdb')
+                shutil.copyfile(config_files[idx], workdir+'/config.ini')
+                script = """#!/bin/bash
 rundock -f config.ini -l ligand.mol2 -r protein.pdb
 """
-        else:
-            script = """#!/bin/bash
+            else:
+                script = """#!/bin/bash
 rundock -f %s -l %s -r %s
 """%(config_files_rel[idx], input_files_l_rel[jdx], input_files_r_rel[idx])
-        with open(workdir+"/run.slurm", 'w') as slurmf:
-            slurmf.write(script)
+
+            with open(workdir+"/run.slurm", 'w') as slurmf:
+                slurmf.write(script)
 
 if args.build_scripts:
     # create jobs to be submitted
@@ -373,75 +384,121 @@ if args.build_scripts:
     
     time_all_targets = single_job_time_sec*ntargets
     
-    if use_isomer_folder:
-        isomerdir = '/isomer*'
-    else:
-        isomerdir = ''
-    
     scriptdir = 'to_submit'
     shutil.rmtree(scriptdir, ignore_errors=True)
     os.mkdir(scriptdir)
-    
+
     if time_all_targets <= walltime_sec:
         nligands_per_job = int(walltime_sec/time_all_targets)
         nscripts = nligands/nligands_per_job
-    
-        for idx in range(nscripts):
-            idx_first = idx*nligands_per_job
-            idx_last = (idx+1)*nligands_per_job-1
 
-            workdirs = []
-            for jdx in range(idx_first, idx_last+1):
-                dir = args.rundir + '/' + ligandids[jdx] + '/target*'
-                if use_isomer_folder:
-                    dir += '/isomer' + str(isomers[jdx])
-                workdirs.append(dir)
-
-            with open(scriptdir+'/run_vs_%i.slurm'%(idx+1), 'w') as ff:
-                ff.write("""#!/bin/bash
-#SBATCH --time=%s
-#SBATCH --partition=%s
-#SBATCH --job-name="vs%s"
+        walltime = args.walltime
+        partition = args.partition
+      
+        for idx in range(nscripts+1):
+            if idx < nscripts:
+                idx_first = idx*nligands_per_job
+                idx_last = (idx+1)*nligands_per_job-1
+                write_script = True
+            elif idx == nscripts:
+                nligands_last_job = nligands - nscripts*nligands_per_job
+                if nligands_last_job != 0:
+                    idx_first = nscripts*nligands_per_job
+                    idx_last = nscripts*nligands_per_job + nligands_last_job - 1
+                    write_script = True
+                else:
+                    write_script = False
+            if write_script:
+                if args.vs_instance:
+                    ligandids_str = " ".join(["'%s'"%id for id in ligandids[idx_first:idx_last+1]])
+                    targetids_str = " ".join(["'%s'"%id for id in sorted(list(set(targetids)))])
+                    isomerids_str = ' '.join(["'%s'"%isomers[jdx] for jdx in range(idx_first,idx_last+1)])
+                    if use_isomer_folder:
+                        create_isomerdir_line = '\nworkdir=$workdir/isomer${isomerids[$id_l]}\nmkdir $workdir'
+                    else:
+                        create_isomerdir_line = ''
+                    files_l_str = " ".join(["'%s'"%ff for ff in input_files_l_rel[idx_first:idx_last+1]])
+                    files_r_str = " ".join(["'%s'"%ff for ff in input_files_r_rel])
+                    files_c_str = " ".join(["'%s'"%ff for ff in config_files_rel])
+                    vs_instance = args.vs_instance
+                    index = idx+1
+                    with open(scriptdir+'/run_vs_%i.slurm'%(idx+1), 'w') as ff:
+                        ff.write("""#!/bin/bash
+#SBATCH --time=%(walltime)s
+#SBATCH --partition=%(partition)s
+#SBATCH --job-name="vs%(index)s"
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --nodes=1
 
-dirs=`echo %s`
+set -e
+curdir=`pwd`
+
+# get ids
+declare -a ligids=(%(ligandids_str)s)
+declare -a targetids=(%(targetids_str)s)
+declare -a isomerids=(%(isomerids_str)s)
+
+# get relative files locations
+declare -a files_l=(%(files_l_str)s)
+declare -a files_r=(%(files_r_str)s)
+declare -a files_c=(%(files_c_str)s)
+
+nfiles_l=`echo ${#files_l[@]}`
+nfiles_r=`echo ${#files_r[@]}`
+
+joinedids=$(echo ${targetids[@]} | sed "s/ /,/g")
+echo ligID,isomer,${joinedids[@]} > vs/%(vs_instance)s_%(index)s.csv
+
+for id_l in `seq 0 $((nfiles_l-1))`; do
+  dir_l=vs/${ligids[$id_l]}
+  mkdir $dir_l
+  line=${ligids[$id_l]},${isomerids[$id_l]}
+  for id_r in `seq 0 $((nfiles_r-1))`; do
+    dir_r=${targetids[$id_r]}
+    workdir=$dir_l/$dir_r
+    # make directories
+    mkdir $workdir%(create_isomerdir_line)s
+    cd $workdir
+    # run dockbox command
+    rundbx -f ${files_c[$id_r]} -l ${files_l[$id_l]} -r ${files_r[$id_r]} &> /dev/null
+    # collect result
+    score=
+    if [ -f %(vs_instance)s/score.out ]; then
+        score=`head -n 1 %(vs_instance)s/score.out`
+    fi
+    line=$line,$score
+    cd $curdir
+  done
+  echo $line >> vs/%(vs_instance)s_%(index)s.csv
+  # extract results
+  rm -rf $dir_l
+done\n"""%locals())
+                else:
+                    workdirs = []
+                    for jdx in range(idx_first, idx_last+1):
+                        dir = args.rundir + '/' + ligandids[jdx] + '/target{1..%i}'%ntargets
+                        if use_isomer_folder:
+                            dir += '/isomer' + str(isomers[jdx])
+                        workdirs.append(dir)
+
+                    workdirs_str = ' '.join(workdirs)
+                    index = idx + 1
+
+                    with open(scriptdir+'/run_vs_%i.slurm'%(idx+1), 'w') as ff:
+                        ff.write("""#!/bin/bash
+#SBATCH --time=%(walltime)s
+#SBATCH --partition=%(partition)s
+#SBATCH --job-name="vs%(index)s"
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --nodes=1
+
+dirs=`echo %(workdirs_str)s`
 curdir=`pwd`
 
 for dir in $dirs; do
   cd $dir
   bash run.slurm
   cd $curdir
-done\n"""%(args.walltime, args.partition, idx+1, ' '.join(workdirs)))
-
-        nligands_last_job = nligands - nscripts*nligands_per_job
- 
-        if nligands_last_job != 0:
-            idx_first = nscripts*nligands_per_job
-            idx_last = nscripts*nligands_per_job + nligands_last_job
-
-            workdirs = []
-            for jdx in range(idx_first, idx_last):
-                dir = args.rundir + '/' + ligandids[jdx] + '/target*'
-                if use_isomer_folder:
-                    dir += '/isomer' + str(isomers[jdx])
-                workdirs.append(dir)
-
-            with open(scriptdir+'/run_vs_%i.slurm'%(nscripts+1), 'w') as ff:
-                ff.write("""#!/bin/bash
-#SBATCH --time=%s
-#SBATCH --partition=%s
-#SBATCH --job-name="vs%s"
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
-#SBATCH --nodes=1
-
-dirs=`echo %s`
-curdir=`pwd`
-
-for dir in $dirs; do
-  cd $dir
-  bash run.slurm
-  cd $curdir
-done\n"""%(args.walltime, args.partition, nscripts+1, ' '.join(workdirs)))
+done\n"""%locals())
