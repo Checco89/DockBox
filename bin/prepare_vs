@@ -67,6 +67,13 @@ parser.add_argument('-w',
 
 others = parser.add_argument_group('arguments to build scripts')
 
+others.add_argument('-exclude',
+    dest='exclude',
+    default=None,
+    nargs='+',
+    metavar='NODE',
+    help='Nodes to be excluded.')
+
 others.add_argument('-p',
     dest='partition',
     type=str,
@@ -394,7 +401,10 @@ if args.build_scripts:
 
         walltime = args.walltime
         partition = args.partition
-      
+        exclude_line = ""
+        if args.exclude:
+            exclude_line = "\n#SBATCH --exclude=%s"%(','.join(args.exclude))
+ 
         for idx in range(nscripts+1):
             if idx < nscripts:
                 idx_first = idx*nligands_per_job
@@ -426,7 +436,8 @@ if args.build_scripts:
                         ff.write("""#!/bin/bash
 #SBATCH --time=%(walltime)s
 #SBATCH --partition=%(partition)s
-#SBATCH --job-name="vs%(index)s"
+#SBATCH --job-name="vs%(index)s"%(exclude_line)s
+#SBATCH --output=/dev/null
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --nodes=1
@@ -489,7 +500,8 @@ done\n"""%locals())
                         ff.write("""#!/bin/bash
 #SBATCH --time=%(walltime)s
 #SBATCH --partition=%(partition)s
-#SBATCH --job-name="vs%(index)s"
+#SBATCH --job-name="vs%(index)s"%(exclude_line)s
+#SBATCH --output=/dev/null
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
 #SBATCH --nodes=1
