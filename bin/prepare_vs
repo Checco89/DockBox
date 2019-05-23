@@ -32,17 +32,17 @@ parser.add_argument('-f',
     default='config.ini',
     help='config file: .ini')
 
-parser.add_argument('-build_scripts',
+parser.add_argument('-build',
     action='store_true',
     dest='build_scripts',
     default=False,
     help='Build scripts to be submitted to SLURM scheduler')
 
-parser.add_argument('-copy',
-    action='store_true',
-    dest='copy',
-    default=False,
-    help='Copy input files into folders (not recommended for large libraries)')
+parser.add_argument('-level',
+    type=int,
+    metavar='INT',
+    default=1,
+    help='Level of virtual screening (0: docking, 1: VS with small number of compounds, 2: VS with large number of compounds')
 
 parser.add_argument('-s',
     dest='sitecsv',
@@ -51,13 +51,6 @@ parser.add_argument('-s',
     default='sites.csv',
     help='csvfile with binding sites: .csv (default: sites.csv)')
 
-parser.add_argument('-vs',
-    dest='vs_instance',
-    type=str,
-    metavar='INSTANCE',
-    default=None,
-    help='Optimize for Virtual Screening (generate and remove folders on the go)')
-
 parser.add_argument('-w',
     dest='rundir',
     type=str,
@@ -65,28 +58,28 @@ parser.add_argument('-w',
     metavar='DIRECTORY NAME',
     help='name of directory created for virtual screening')
 
-others = parser.add_argument_group('arguments to build scripts')
+others = parser.add_argument_group('arguments to build scripts (to be used with -build option)')
 
 others.add_argument('-exclude',
     dest='exclude',
     default=None,
     nargs='+',
     metavar='NODE',
-    help='Nodes to be excluded.')
+    help='Nodes to be excluded. Default: none')
 
 others.add_argument('-p',
     dest='partition',
     type=str,
     default='serial',
     metavar='NAME',
-    help='SLURM Partition name.')
+    help='SLURM Partition name. Default: serial')
 
 others.add_argument('-t',
     dest='time',
     type=str,
-    default='24:00:00',
+    default='00:05:00',
     metavar='TIME',
-    help='Approx. time needed for a single job in hh:mm:ss or dd-hh:mm format!')
+    help='Approx. time needed for a single job in hh:mm:ss or dd-hh:mm format! Default: 00:05:00')
 
 others.add_argument('-wt',
     dest='walltime',
@@ -139,9 +132,9 @@ def slurm_to_seconds(string):
     time = days*24*3600 + hours*3600 + minutes*60 + seconds
     return time
 
-def seconds_to_slurm(seconds):
+def seconds_to_slurm(time):
 
-    days = seconds/(24*3600)
+    days = time/(24*3600)
     hours = (time - days*24*3600)/3600 
     minutes = (time - days*24*3600 - hours*3600)/60
     seconds = time - days*24*3600 - hours*3600 - minutes*60
@@ -166,6 +159,7 @@ def seconds_to_slurm(seconds):
     return slurm_time
 
 args = parser.parse_args()
+level = args.level
 
 exts = list(set([os.path.splitext(ff)[1] for ff in args.input_files_r]))
 if len(exts) != 1: # if more than one extension provided
@@ -245,6 +239,17 @@ else:
 
 if not os.path.isfile(args.config_file):
     raise ValueError("Config file %s not found!"%args.config_file)
+
+if level == 2: # check if only one program was used for docking
+    config = ConfigParser.SafeConfigParser()
+    config.read(args.config_file)
+    if config.has_option('DOCKING', 'program'):
+        instances = config.get('DOCKING', 'program').lower()
+        instances = map(str.strip, instances.split(','))
+        if len(instances) == 1:
+            instance = instances[0]
+        else:
+            sys.exit("More than one docking program cannot be used for docking!")
 
 def update_config_file(new_config_file, config_file, label_r, csvfile):
     """Update binding site parameters in config file"""
@@ -351,7 +356,7 @@ for jdx in range(nligands): #, file_l in enumerate(input_files_l):
         else:
             workdir = rundir + '/' + ligid + '/' + recid
 
-        if not args.vs_instance:
+        if level in [0, 1]:
             os.makedirs(workdir)
 
         # create list of relative paths for targets and receptors
@@ -368,19 +373,19 @@ for jdx in range(nligands): #, file_l in enumerate(input_files_l):
             for file_c in config_files:
                 config_files_rel.append(os.path.relpath(file_c, workdir))
 
-        if not args.vs_instance:
-            if args.copy and not args.vs_instance:
-                shutil.copyfile(input_files_l[jdx], workdir+'/ligand.mol2')
-                shutil.copyfile(input_files_r[idx], workdir+'/protein.pdb')
-                shutil.copyfile(config_files[idx], workdir+'/config.ini')
-                script = """#!/bin/bash
-rundock -f config.ini -l ligand.mol2 -r protein.pdb
+        if level == 0: # copy all the files in level 0
+           shutil.copyfile(input_files_l[jdx], workdir+'/ligand.mol2')
+           shutil.copyfile(input_files_r[idx], workdir+'/protein.pdb')
+           shutil.copyfile(config_files[idx], workdir+'/config.ini')
+           script = """#!/bin/bash
+rundbx -f config.ini -l ligand.mol2 -r protein.pdb
 """
-            else:
-                script = """#!/bin/bash
-rundock -f %s -l %s -r %s
+        elif level == 1: # don't copy files in level 1 but create a script to be run in every folder
+           script = """#!/bin/bash
+rundbx -f %s -l %s -r %s
 """%(config_files_rel[idx], input_files_l_rel[jdx], input_files_r_rel[idx])
 
+        if level in [0, 1]:
             with open(workdir+"/run.slurm", 'w') as slurmf:
                 slurmf.write(script)
 
@@ -419,7 +424,7 @@ if args.build_scripts:
                 else:
                     write_script = False
             if write_script:
-                if args.vs_instance:
+                if level == 2:
                     ligandids_str = " ".join(["'%s'"%id for id in ligandids[idx_first:idx_last+1]])
                     targetids_str = " ".join(["'%s'"%id for id in sorted(list(set(targetids)))])
                     isomerids_str = ' '.join(["'%s'"%isomers[jdx] for jdx in range(idx_first,idx_last+1)])
@@ -430,8 +435,7 @@ if args.build_scripts:
                     files_l_str = " ".join(["'%s'"%ff for ff in input_files_l_rel[idx_first:idx_last+1]])
                     files_r_str = " ".join(["'%s'"%ff for ff in input_files_r_rel])
                     files_c_str = " ".join(["'%s'"%ff for ff in config_files_rel])
-                    vs_instance = args.vs_instance
-                    index = idx+1
+                    index = idx + 1
                     with open(scriptdir+'/run_vs_%i.slurm'%(idx+1), 'w') as ff:
                         ff.write("""#!/bin/bash
 #SBATCH --time=%(walltime)s
@@ -459,7 +463,7 @@ nfiles_l=`echo ${#files_l[@]}`
 nfiles_r=`echo ${#files_r[@]}`
 
 joinedids=$(echo ${targetids[@]} | sed "s/ /,/g")
-echo ligID,isomer,${joinedids[@]} > vs/%(vs_instance)s_%(index)s.csv
+echo ligID,isomer,${joinedids[@]} > vs/%(instance)s_%(index)s.csv
 
 for id_l in `seq 0 $((nfiles_l-1))`; do
   dir_l=vs/${ligids[$id_l]}
@@ -475,13 +479,13 @@ for id_l in `seq 0 $((nfiles_l-1))`; do
     rundbx -f ${files_c[$id_r]} -l ${files_l[$id_l]} -r ${files_r[$id_r]} &> /dev/null
     # collect result
     score=
-    if [ -f %(vs_instance)s/score.out ]; then
-        score=`head -n 1 %(vs_instance)s/score.out`
+    if [ -f %(instance)s/score.out ]; then
+        score=`head -n 1 %(instance)s/score.out`
     fi
     line=$line,$score
     cd $curdir
   done
-  echo $line >> vs/%(vs_instance)s_%(index)s.csv
+  echo $line >> vs/%(instance)s_%(index)s.csv
   # extract results
   rm -rf $dir_l
 done\n"""%locals())
